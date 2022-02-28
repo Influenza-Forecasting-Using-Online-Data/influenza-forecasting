@@ -1,6 +1,5 @@
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-from utils import get_datetime_df
 import pandas as pd
 
 
@@ -12,6 +11,7 @@ class Errors:
         self.data_weekly = data
         self.actual_name = actual_col_name
         self.predicted_name = predicted_col_name
+        self.year_df = None
 
     def _get_mae(self, actual, predicted):
         self.mae = mean_absolute_error(actual, predicted)
@@ -81,7 +81,7 @@ class Errors:
         NEGs = []
         RMSEs = []
         for year in self.years:
-            year_df = self.data_weekly[self.data_weekly == year]
+            self.year_df = self.data_weekly[self.data_weekly['year'] == year]
             actual = self.year_df[self.actual_name]
             predicted = self.year_df[self.predicted_name]
 

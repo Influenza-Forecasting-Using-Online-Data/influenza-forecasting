@@ -28,13 +28,6 @@ class ARHelper:
         self.train_data = None
         self.order = None
 
-    def set_model(self, order, seasonal_order=None):
-        self.model = sm.tsa.statespace.SARIMAX(endog=self.train_data, order=order, seasonal_order=seasonal_order)
-        sorder_str = '' if seasonal_order is None else str(seasonal_order)
-        self.model_name = str(order) + sorder_str
-        self.order = order
-        self.seasonal_order = seasonal_order
-
     def set_model_name(self, model_name):
             self.model_name = model_name
 
@@ -61,6 +54,13 @@ class ARHelper:
             print('\n')
             print('Test Data 2\n----------\n' + str(self.test_data))
 
+    def create_model(self, order, seasonal_order=None):
+        self.model = sm.tsa.statespace.SARIMAX(endog=self.train_data, order=order, seasonal_order=seasonal_order)
+        sorder_str = '' if seasonal_order is None else str(seasonal_order)
+        self.model_name = str(order) + sorder_str
+        self.order = order
+        self.seasonal_order = seasonal_order
+
     def select_best_hyperparams(self, maxlag, ic='bic', glob=False, trend='n', seasonal=False, period=None):
         """
         Selects a model with bet performing hyperparamters for given validation
@@ -72,10 +72,6 @@ class ARHelper:
         """
         select_result = ar_select_order(self.validate_data, maxlag=maxlag, seasonal=seasonal,
                                         period=period, glob=glob, ic=ic, old_names=False)
-        self.model = sm.tsa.statespace.SARIMAX(endog=self.train_data, order=select_result.model.order)
-        print(select_result.model.order)
-        print(select_result.model.seasonal_order)
-        self.model_name = type(self.model).__name__
         return select_result
 
     def train_model(self):
@@ -95,7 +91,8 @@ class ARHelper:
         assert self.test_data is not None
         assert self.train_result is not None
 
-        temp_model = sm.tsa.statespace.SARIMAX(endog=self.test_data, order=self.order, seasonal_order=self.seasonal_order)
+        temp_model = sm.tsa.statespace.SARIMAX(endog=self.data[self.endog_col_name],
+                                               order=self.order, seasonal_order=self.seasonal_order)
         # https://www.statsmodels.org/devel/generated/statsmodels.tsa.arima.model.ARIMA.fix_params.html
         with temp_model.fix_params(self.train_result.params[:-1]):
             self.test_result = temp_model.fit()
@@ -126,15 +123,29 @@ class ARHelper:
         return test_prediction_df
 
 
-def plot_ar_results(dataset_type, *arHelpers, figsize=(30, 10), ticks_fontsize=16,
+def plot_ar_results(dataset_type, arHelpers, x_format='month',figsize=(30, 10), ticks_fontsize=16,
                     legend_fontsize=20, title='', title_fontsize=20, label_fontsize=22,
                     xlim=None, ground_truth_col='Disease Rate', include_ground_truth=True):
-    assert len(arHelpers) > 0
+    if isinstance(arHelpers, list) is False:
+        raise Exception("arHelper object must be passed as list")
+    if len(arHelpers) == 0:
+        raise Exception("arHelper list is empty")
 
     data_interval = None
     model_result_attr = None
     interval_attr = ''
     data = None
+    x_axis_locator = None
+    x_axis_formatter = None
+    if x_format == 'month':
+        x_axis_locator = mdates.MonthLocator(bymonthday=1)
+        x_axis_formatter = mdates.DateFormatter('%Y %b')
+    elif x_format == 'week':
+        x_axis_locator = mdates.WeekdayLocator(byweekday=mdates.MO, interval=1)
+        x_axis_formatter = mdates.ConciseDateFormatter(x_axis_locator)
+    else:
+        raise Exception("x_format must be 'month' or 'week'")
+
     if dataset_type == 'train':
         data_interval = arHelpers[0].train_interval
         interval_attr = 'train_interval'
@@ -179,8 +190,8 @@ def plot_ar_results(dataset_type, *arHelpers, figsize=(30, 10), ticks_fontsize=1
     if include_ground_truth:
         full_dataframe.plot(use_index=True, y=ground_truth_col, x_compat=True, ax=ax)
 
-    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y %b'))
+    ax.xaxis.set_major_locator(x_axis_locator)
+    ax.xaxis.set_major_formatter(x_axis_formatter)
 
     plt.xticks(fontsize=ticks_fontsize)
     plt.yticks(fontsize=ticks_fontsize)

@@ -53,7 +53,7 @@ class Errors:
             errors_df['MSE'] = MSEs
         if 'NLL' in error_types or show_all:
             errors_df['NLL'] = NLLs
-        if 'RMSE'in error_types or show_all:
+        if 'RMSE' in error_types or show_all:
             errors_df['RMSE'] = RMSEs
 
         return errors_df
@@ -105,7 +105,7 @@ class Errors:
         return (MAEs, MAPEs, MSEs, NLLs, RMSEs)
 
 
-def get_errors_for_models(data, error_type, actual_col_name, predicted_col_names):
+def get_models_error(data, error_type, actual_col_name, predicted_col_names):
     error_types = {"MAE", "MAPE", "MSE", "RMSE"}
     error_type = error_type.upper()
     if error_type not in error_types:
@@ -114,8 +114,8 @@ def get_errors_for_models(data, error_type, actual_col_name, predicted_col_names
         raise Exception("predicted_col_names should a list of size > 0")
 
     error = Errors(data, actual_col_name, predicted_col_names[0])
-    error_df = error.get_errors(show_all=False, error_types={error_type}) # grab year and no. of weeks columns
-    error_df = error_df.loc[:, error_df.columns != error_type] # exclude error column
+    error_df = error.get_errors(show_all=False, error_types={error_type})  # grab year and no. of weeks columns
+    error_df = error_df.loc[:, error_df.columns != error_type]  # exclude error column
 
     for i in range(0, len(predicted_col_names)):
         predicted_col_name = predicted_col_names[i]
@@ -123,4 +123,21 @@ def get_errors_for_models(data, error_type, actual_col_name, predicted_col_names
         error_column = error.get_errors(show_all=False, error_types={error_type})[error_type]
         error_df[predicted_col_name] = error_column
 
+    error_df.style.set_caption(error_type)
     return error_df
+
+
+def get_best_performing_models(error_df):
+    # TODO: add error_type as param
+    best_columns = []
+    best_values = []
+    copy_df = error_df.copy(deep=True)
+    copy_df.drop('no. of weeks', axis=1, inplace=True)
+    for index, row in copy_df.iterrows():
+        best_column = row.idxmin()
+        best_value = row.min()
+
+        best_columns.append(best_column)
+        best_values.append(best_value)
+
+    return pd.DataFrame({'years': error_df['years'], 'best model': best_columns, 'error': best_values})

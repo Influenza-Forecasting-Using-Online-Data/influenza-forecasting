@@ -1,16 +1,55 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import logging
+import warnings
+
 import matplotlib.dates as mdates
-import copy
-
-import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import pandas as pd
+import statsmodels.tsa.arima.model
 from statsmodels.tsa.ar_model import ar_select_order
+from statsmodels.tsa.statespace.sarimax import SARIMAXResults, SARIMAXResultsWrapper
+
+from data.errors import get_models_error
+
+log = logging.getLogger("models.ar_model")
 
 
+class ARModelSpecification:
+    def __init__(self, order, seasonal_order=(0, 0, 0, 0), model_class=statsmodels.tsa.arima.model.ARIMA):
+        self.model_class = model_class
+        self.order = order
+        self.seasonal_order = seasonal_order
+        self.model_name = None
 
-class ARHelper:
-    def __init__(self):
+    def init_model(self, endog, exog=None):
+        self.model_name = get_ar_model_name(self.order, self.seasonal_order)
+        return self.model_class(endog=endog, exog=exog, order=self.order, seasonal_order=self.seasonal_order)
+
+    def __eq__(self, other):
+        if self.model_class == other.model_class and self.order == other.order and self.seasonal_order == other.seasonal_order:
+            return True
+        return False
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def __hash__(self):
+        return hash((self.model_class, self.order, self.seasonal_order))
+
+    def __str__(self):
+        model_class_str = ""
+        if self.model_class == statsmodels.tsa.arima.model.ARIMA:
+            model_class_str = "statsmodels.tsa.arima.model.ARIMA"
+        elif self.model_class == statsmodels.tsa.statespace.sarimax.SARIMAX:
+            model_class_str = "statsmodels.tsa.statespace.sarimax.SARIMAX"
+        else:
+            model_class_str = "unknown class"
+        return model_class_str + " " + str(self.model_name)
+
+
+class ARModelWrapper:
+    def __init__(self, ar_model_spec):
+        self.ar_model_spec = ar_model_spec
+        self.test_and_train_data = None
         self.seasonal_order = None
         self.y_test_prediction = None
         self.test_result = None
@@ -27,25 +66,36 @@ class ARHelper:
         self.endog_col_name = None
         self.train_data = None
         self.order = None
+        self.method = None
+        self.maxiter = 1000
 
     def set_model_name(self, model_name):
-            self.model_name = model_name
+        self.model_name = model_name
 
     def set_data(self, data, endog_col_name):
         self.data = data
         self.endog_col_name = endog_col_name
 
-    def split_dataset_by_intervals(self, train_interval, validation_interval, test_interval, print_data=False):
+    def set_model_specification(self, ar_model_spec):
+        self.ar_model_spec = ar_model_spec
+
+    def split_dataset_by_intervals(self, train_interval, test_interval, validation_interval=None, print_data=False):
         assert self.data is not None
         assert self.endog_col_name is not None
+        assert self.ar_model_spec is not None
 
         self.train_data = self.data[self.endog_col_name][train_interval[0]:train_interval[1]]
-        self.validate_data = self.data[self.endog_col_name][validation_interval[0]:validation_interval[1]]
+        if validation_interval is not None:
+            self.validate_data = self.data[self.endog_col_name][validation_interval[0]:validation_interval[1]]
         self.test_data = self.data[self.endog_col_name][test_interval[0]:test_interval[1]]
+        self.test_and_train_data = self.data[self.endog_col_name]
 
         self.train_interval = train_interval
         self.validation_interval = validation_interval
         self.test_interval = test_interval
+
+        self.model = self.ar_model_spec.init_model(endog=self.train_data,
+                                                   exog=None)  # TODO: implement exogenous variables
 
         if print_data is True:
             print('Training Data 1\n-------------\n' + str(self.train_data))
@@ -54,12 +104,9 @@ class ARHelper:
             print('\n')
             print('Test Data 2\n----------\n' + str(self.test_data))
 
-    def create_model(self, order, seasonal_order=None):
-        self.model = sm.tsa.statespace.SARIMAX(endog=self.train_data, order=order, seasonal_order=seasonal_order)
-        sorder_str = '' if seasonal_order is None else str(seasonal_order)
-        self.model_name = str(order) + sorder_str
-        self.order = order
-        self.seasonal_order = seasonal_order
+    def set_optimization(self, method, maxiter):
+        self.method = method
+        self.maxiter = maxiter
 
     def select_best_hyperparams(self, maxlag, ic='bic', glob=False, trend='n', seasonal=False, period=None):
         """
@@ -70,34 +117,58 @@ class ARHelper:
         
         Returns: ar_select_order result, NOT model.
         """
+        assert self.model is not None
+
+        if self.validation_interval is None:
+            raise Exception('No validation_interval specified, use split_dataset_by_intervals to add it')
         select_result = ar_select_order(self.validate_data, maxlag=maxlag, seasonal=seasonal,
                                         period=period, glob=glob, ic=ic, old_names=False)
         return select_result
 
-    def train_model(self):
+    def _fit(self, method, maxiter=None, cov_type=None):
+        if self.ar_model_spec.model_class == statsmodels.tsa.arima.model.ARIMA and maxiter is not None:
+            warnings.warn(
+                'Cannot use maxiter={x}: maxiter paramter not supported by statsmodels.tsa.arima.model.ARIMA'.format(
+                    x=maxiter))
+            if method is not None:
+                return self.model.fit(method=method, cov_type=cov_type)
+            else:
+                return self.model.fit(cov_type=cov_type)
+
+        if maxiter is not None:
+            self.maxiter = maxiter
+        if method is not None:
+            return self.model.fit(method=method, maxiter=self.maxiter, cov_type=cov_type)
+        else:
+            return self.model.fit(maxiter=self.maxiter, cov_type=cov_type)
+
+    def train_model(self, method=None, maxiter=None, cov_type=None):
         assert self.model is not None
         assert self.train_data is not None
-        assert self.validate_data is not None
         assert self.test_data is not None
 
-        self.train_result = self.model.fit()
+        if method is not None:
+            self.method = method
+        if maxiter is not None:
+            self.maxiter = maxiter
+        self.train_result = self._fit(method=self.method, maxiter=self.maxiter, cov_type=cov_type)
+
         self.y_train_prediction = self.train_result.predict(self.train_interval[0], self.train_interval[1])
         return self.train_result
 
-    def test_model(self, steps=1):
+    def test_model(self, dynamic=False, steps=1):
         assert self.model is not None
         assert self.train_data is not None
-        assert self.validate_data is not None
         assert self.test_data is not None
         assert self.train_result is not None
 
-        temp_model = sm.tsa.statespace.SARIMAX(endog=self.data[self.endog_col_name],
-                                               order=self.order, seasonal_order=self.seasonal_order)
-        # https://www.statsmodels.org/devel/generated/statsmodels.tsa.arima.model.ARIMA.fix_params.html
-        with temp_model.fix_params(self.train_result.params[:-1]):
-            self.test_result = temp_model.fit()
-            self.y_test_prediction = self.test_result.predict(self.test_interval[0], self.test_interval[1],
-                                                              dynamic=False)
+        self.test_result = self.train_result.apply(endog=self.test_and_train_data, refit=False)
+
+        self.y_test_prediction = self.test_result.predict(start=self.test_interval[0], end=self.test_interval[1],
+                                                          dynamic=dynamic)
+        if self.model is not None:
+            self.model.endog = self.train_data
+        # TODO does not work with seasonal
         return self.test_result
 
     def get_train_prediction_df(self, model_name=None, steps=1):
@@ -123,18 +194,17 @@ class ARHelper:
         return test_prediction_df
 
 
-def plot_ar_results(dataset_type, arHelpers, x_format='month',figsize=(30, 10), ticks_fontsize=16,
-                    legend_fontsize=20, title='', title_fontsize=20, label_fontsize=22,
-                    xlim=None, ground_truth_col='Disease Rate', include_ground_truth=True):
-    if isinstance(arHelpers, list) is False:
-        raise Exception("arHelper object must be passed as list")
-    if len(arHelpers) == 0:
-        raise Exception("arHelper list is empty")
+def get_ar_model_name(order, s_order=None):
+    sorder_str = '' if s_order is None else str(s_order)
+    return str(order) + sorder_str
 
-    data_interval = None
-    model_result_attr = None
-    interval_attr = ''
-    data = None
+
+def plot_models(data, model_cols, x_format='month', figsize=(30, 10), ticks_fontsize=16,
+                legend_fontsize=20, title='', title_fontsize=20, label_fontsize=22,
+                xlim=None, ground_truth_col='Disease Rate', include_ground_truth=True):
+    if isinstance(model_cols, list) is False:
+        raise Exception("models_cols object must be passed as list")
+
     x_axis_locator = None
     x_axis_formatter = None
     if x_format == 'month':
@@ -146,49 +216,11 @@ def plot_ar_results(dataset_type, arHelpers, x_format='month',figsize=(30, 10), 
     else:
         raise Exception("x_format must be 'month' or 'week'")
 
-    if dataset_type == 'train':
-        data_interval = arHelpers[0].train_interval
-        interval_attr = 'train_interval'
-        model_result_attr = 'train_result'
-        data = arHelpers[0].train_data
-    elif dataset_type == 'test':
-        data_interval = arHelpers[0].test_interval
-        interval_attr = 'test_interval'
-        model_result_attr = 'test_result'
-        data = arHelpers[0].test_data
-    else:
-        raise Exception("dataset_type must be 'train' or 'test'")
-
     fig, ax = plt.subplots(figsize=figsize)
-    index = 0
-    full_dataframe = arHelpers[0].data.copy(deep=True)[data_interval[0]:data_interval[1]]
-    for arHelper in arHelpers:
-        if getattr(arHelper, model_result_attr) is None:
-            plt.clf()
-            raise Exception("arHelper at index=" + str(index) + " missing" + str(model_result_attr))
-        if getattr(arHelper, interval_attr) != data_interval:
-            plt.clf()
-            raise Exception("All arHelpers must have the same test interval, expected "
-                            + str(data_interval) + " got " + str(arHelper.test_interval)
-                            + " at arHelper index=" + str(index))
-        index += 1
-        if dataset_type == 'train':
-            # if data.equals(arHelper.train_data) is False:
-            #     plt.clf()
-            #     raise Exception("train data not equal at arHelper with index=" + str(index))
-            full_dataframe[str(index) + " " + str(arHelper.model_name)] = arHelper.y_train_prediction
-        else:
-            # if data.equals(arHelper.test_data) is False:
-            #     plt.clf()
-            #     raise Exception("test data not equal at arHelper with index=" + str(index))
-            full_dataframe[str(index) + " " + str(arHelper.model_name)] = arHelper.y_test_prediction
-
-    index = 0
-    for arHelper in arHelpers:
-        index += 1
-        full_dataframe.plot(use_index=True, y=str(index) + " " + str(arHelper.model_name), x_compat=True, ax=ax)
+    for model_col in model_cols:
+        data.plot(use_index=True, y=str(model_col), x_compat=True, ax=ax)
     if include_ground_truth:
-        full_dataframe.plot(use_index=True, y=ground_truth_col, x_compat=True, ax=ax)
+        data.plot(use_index=True, y=ground_truth_col, x_compat=True, ax=ax)
 
     ax.xaxis.set_major_locator(x_axis_locator)
     ax.xaxis.set_major_formatter(x_axis_formatter)
@@ -196,9 +228,8 @@ def plot_ar_results(dataset_type, arHelpers, x_format='month',figsize=(30, 10), 
     plt.xticks(fontsize=ticks_fontsize)
     plt.yticks(fontsize=ticks_fontsize)
 
-    ax.set_xlabel(str(data_interval[0]) + ' - ' + str(data_interval[1]), fontsize=label_fontsize)
+    # ax.set_xlabel(str(data_interval[0]) + ' - ' + str(data_interval[1]), fontsize=label_fontsize)
     ax.set_ylabel('ILI Rate', fontsize=label_fontsize)
-
     plt.legend(fontsize=legend_fontsize)
     plt.title(title, fontsize=title_fontsize)
 
@@ -206,4 +237,192 @@ def plot_ar_results(dataset_type, arHelpers, x_format='month',figsize=(30, 10), 
         plt.xlim(xlim[0], xlim[1])
 
     plt.show()
-    return full_dataframe
+
+
+class ARModelsReport:
+    def __init__(self):
+        self.model_cols = None
+        self.test_df = None
+        self.train_df = None
+        self.mae_df = None
+        self.mape_df = None
+        self.mse_df = None
+        self.rmse_df = None
+        self.ground_truth_col = None
+        self.trainResultsMap = {}
+
+    def set_train_dataframe(self, train_df):
+        self.test_df = train_df
+
+    def set_test_dataframe(self, test_df):
+        self.test_df = test_df
+
+    def set_model_cols(self, model_cols):
+        self.model_cols = model_cols
+
+    def add_train_result(self, ar_model_spec, train_result):
+        if isinstance(train_result, SARIMAXResultsWrapper) is False:
+            raise Exception(
+                'train_result should be an instance of statsmodels.tsa.statespace.sarimax.SARIMAXResults object')
+        if isinstance(ar_model_spec, ARModelSpecification) is False:
+            raise Exception(
+                'ar_model_spec should be an instance of models.ar_model.ARModelSpecification object')
+        self.trainResultsMap[ar_model_spec] = train_result
+
+    def plot_models(self, multi_plot=False, include_ground_truth=True, xlim=None):
+        plot_title = 'Out-of-sample Test Plot'
+        plot_models(self.test_df, self.model_cols, x_format='week', title=plot_title,
+                    ground_truth_col=self.ground_truth_col,
+                    include_ground_truth=include_ground_truth)  # TODO: add xlim here
+        if multi_plot is True:
+            for model_col in self.model_cols:
+                plot_title = 'Out-of-sample Test Plot ' + str(model_col)
+                plot_models(self.test_df, [model_col], x_format='week', title=plot_title,
+                            ground_truth_col=self.ground_truth_col, include_ground_truth=include_ground_truth)
+
+    def highlight_min(self, df, col_subset, props=''):
+        return
+
+    def show_errors(self, highlight_min=True, highlight_max=False):
+        self.mae_df = self.mae_df.style.set_caption('MAE').highlight_min(axis=1, color='lightgreen',
+                                                                         subset=self.mae_df.columns[2:])
+        self.mape_df = self.mape_df.style.set_caption('MAPE').highlight_min(axis=1, color='lightgreen',
+                                                                            subset=self.mape_df.columns[2:])
+        self.mse_df = self.mse_df.style.set_caption('MSE').highlight_min(axis=1, color='lightgreen',
+                                                                         subset=self.mse_df.columns[2:])
+        self.rmse_df = self.rmse_df.style.set_caption('RMSE').highlight_min(axis=1, color='lightgreen',
+                                                                            subset=self.rmse_df.columns[2:])
+        display(self.mae_df)
+        display(self.mape_df)
+        display(self.mse_df)
+        display(self.rmse_df)
+        # display(get_best_performing_models(mae_df))
+        # display(get_best_performing_models(mape_df))
+        # display(get_best_performing_models(mse_df))
+        # display(get_best_performing_models(rmse_df))
+
+
+def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
+                            validation_interval=None, ground_truth_col='Disease Rate',
+                            additional_model_cols=[], optimize_method=None,
+                            train_maxiter=1000, cov_type=None):
+    """
+    Creates ARModelsReport object containing training and testing report of given models.
+
+    Args
+    ----------
+    data : Dataframe
+        Pandas dataframe containing input variables for the models. Should also include
+        additional models whose column names can be specified through additional_model_cols parameter.
+
+    ar_model_specs : list
+        List of ARModelSpecification objects.
+
+    train_interval: tuple
+        Interval used to select the training data for models from the given dataframe.
+        Left-most element should be start index of training data. Right-most element should
+        be end index of training data.
+        Both elements should be a datetime object in the same format as the index of the
+        given data.
+
+    test_interval: tuple
+        Interval used to select the test data for models from the given dataframe.
+        Same as train_interval.
+
+    Returns
+    -------
+    ARModelsReport object.
+    """
+    if ar_model_specs is not None and isinstance(ar_model_specs, list) is False:
+        raise Exception('ar_model_specs parameter must be a list of ARModelSpecification objects')
+    if additional_model_cols is not None and isinstance(additional_model_cols, list) is False:
+        raise Exception('additional models parameter must be a list of strings representing the column names of the '
+                        'given data')
+
+    ar_models_report = ARModelsReport()
+    ar_models_report.ground_truth_col = ground_truth_col
+    ar_model_wrappers = []
+    model_name_list = []
+    for i in range(0, len(ar_model_specs)):
+        ar_model_spec = ar_model_specs[i]
+        ar_wrapper = ARModelWrapper(ar_model_specs[i])
+
+        ar_wrapper.set_data(data, ground_truth_col)
+        ar_wrapper.split_dataset_by_intervals(train_interval=train_interval, test_interval=test_interval,
+                                              validation_interval=validation_interval, print_data=False)
+
+        print("Training model {m} ...\n".format(m=str(ar_model_spec)))
+        ar_wrapper.train_model(method=optimize_method, maxiter=train_maxiter, cov_type=cov_type)
+        ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
+
+        print("Testing model {m} ...\n".format(m=str(ar_model_spec)))
+        ar_wrapper.test_model()
+        ar_model_wrappers.append(ar_wrapper)
+
+        if ar_model_spec.model_name is not None:
+            model_name_list.append(str(i) + ' ' + str(ar_model_spec.model_name))
+        else:
+            model_name_list.append(str(i))
+
+    i = 0
+    train_df = ar_model_wrappers[0].data.copy(deep=True)[train_interval[0]:train_interval[1]]
+    test_df = ar_model_wrappers[0].data.copy(deep=True)[test_interval[0]:test_interval[1]]
+    for ar_wrapper in ar_model_wrappers:
+        train_df[str(model_name_list[i])] = ar_wrapper.y_train_prediction
+        test_df[str(model_name_list[i])] = ar_wrapper.y_test_prediction
+        i += 1
+
+    for additional_model_col in additional_model_cols:
+        train_df[additional_model_col] = data[additional_model_col][train_interval[0]:train_interval[1]]
+        test_df[additional_model_col] = data[additional_model_col][test_interval[0]:test_interval[1]]
+        model_name_list.append(additional_model_col)
+
+    ar_models_report.set_train_dataframe(train_df)
+    ar_models_report.set_test_dataframe(test_df)
+    ar_models_report.set_model_cols(model_name_list)
+
+    log.info("Creating error tables ...")
+    print("Creating error tables ...\n")
+    ar_models_report.mae_df = get_models_error(test_df, error_type='mae', actual_col_name='Disease Rate',
+                                               predicted_col_names=model_name_list)
+    ar_models_report.mape_df = get_models_error(test_df, error_type='mape', actual_col_name='Disease Rate',
+                                                predicted_col_names=model_name_list)
+    ar_models_report.mse_df = get_models_error(test_df, error_type='mse', actual_col_name='Disease Rate',
+                                               predicted_col_names=model_name_list)
+    ar_models_report.rmse_df = get_models_error(test_df, error_type='rmse', actual_col_name='Disease Rate',
+                                                predicted_col_names=model_name_list)
+    return ar_models_report
+
+
+def create_all_ar_models_report(data, ar_model_specs, train_intervals, test_intervals,
+                                validation_interval=None, ground_truth_col='Disease Rate',
+                                additional_model_cols=[], optimize_method=None,
+                                train_maxiter=1000, cov_type=None):
+    if len(train_intervals) != len(test_intervals):
+        raise Exception(
+            'length of train_intervals not equal to test_intervals. Make sure each train interval has an associated '
+            'test interval.')
+    for test_interval in test_intervals:
+        if test_interval[0].year != test_interval[1].year:
+            raise Exception(
+                'all test interval must span single, disjoint years form each other (current implementation).')
+
+    test_intervals_to_reports_map = {'mae': pd.DataFrame(), 'mape': pd.DataFrame(), 'mse': pd.DataFrame(),
+                                     'rmse': pd.DataFrame()}
+    for i in range(0, len(train_intervals)):
+        train_interval = train_intervals[i]
+        test_interval = test_intervals[i]
+        ar_models_report = create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
+                                                   validation_interval=validation_interval,
+                                                   ground_truth_col=ground_truth_col,
+                                                   additional_model_cols=additional_model_cols,
+                                                   optimize_method=optimize_method,
+                                                   train_maxiter=train_maxiter, cov_type=cov_type)
+        # TODO: allow multiple years (hash by test_interval tuple). Currently only accepts test_intervals that span
+        #  disjoint years
+        test_intervals_to_reports_map[test_intervals[0].year] = ar_models_report
+        test_intervals_to_reports_map['mae'].append(ar_models_report.mae_df, ignore_index=True)
+        test_intervals_to_reports_map['mape'].append(ar_models_report.mape_df, ignore_index=True)
+        test_intervals_to_reports_map['mse'].append(ar_models_report.mse_df, ignore_index=True)
+        test_intervals_to_reports_map['rmse'].append(ar_models_report.rmse_df, ignore_index=True)
+    return test_intervals_to_reports_map

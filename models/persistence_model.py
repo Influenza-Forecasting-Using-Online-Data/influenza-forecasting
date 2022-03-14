@@ -3,7 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-def create_baseline(data, shift):
+
+def create_persistence(data, shift, persistance_col_name='Persistance'):
     """
     Parameters:
     data (DataFrame): original data
@@ -15,10 +16,10 @@ def create_baseline(data, shift):
     if shift <= 0:
         raise ValueError('shift must be greater than 0')
     data_baseline = data.copy()
-    data_baseline['Predicted Rate'] = data_baseline['Disease Rate'].shift(shift)
-    data_baseline.drop(data_baseline.head(shift).index, inplace=True) # drop first 'shift' num of rows
+    data_baseline[persistance_col_name] = data_baseline['Disease Rate'].shift(shift)
+    data_baseline.drop(data_baseline.head(shift).index, inplace=True)  # drop first 'shift' num of rows
     return data_baseline
-  
+
 # def plot_yearly_data()  
 #   fig, ax = plt.subplots(figsize=(30, 10))
 #

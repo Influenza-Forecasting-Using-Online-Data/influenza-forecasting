@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 
 import matplotlib.dates as mdates
@@ -9,8 +10,6 @@ from statsmodels.tsa.ar_model import ar_select_order
 from statsmodels.tsa.statespace.sarimax import SARIMAXResults, SARIMAXResultsWrapper
 
 from data.errors import get_models_error
-
-import os
 
 log = logging.getLogger("models.ar_model")
 
@@ -158,16 +157,33 @@ class ARModelWrapper:
         self.y_train_prediction = self.train_result.predict(self.train_interval[0], self.train_interval[1])
         return self.train_result
 
-    def test_model(self, dynamic=False, steps=1):
+    def test_model(self, steps=1):
+        if steps < 1:
+            raise Exception('steps must be greater than or equal to 1')
         assert self.model is not None
         assert self.train_data is not None
         assert self.test_data is not None
         assert self.train_result is not None
 
-        self.test_result = self.train_result.apply(endog=self.test_and_train_data, refit=False)
+        if steps == 1:
+            self.test_result = self.train_result.apply(endog=self.test_and_train_data, refit=False)
+            self.y_test_prediction = self.test_result.predict(start=self.test_interval[0], end=self.test_interval[1],
+                                                              dynamic=False)
+        else:
+            test_result = None
+            steps_ahead_forecasts = self.test_data.copy(deep=True).iloc[0:steps - 1]
+            for i in range(0, len(self.test_data) - steps + 1):
+                test_result = self.train_result.append(endog=[self.test_data.iloc[i]], refit=False)
+                forecast_point_steps_ahead = pd.Series(test_result.forecast(steps=steps)[steps - 1],
+                                                       index=[self.test_data.index[i + steps - 1]])
+                # print(forecast_point_steps_ahead)
+                steps_ahead_forecasts = pd.concat([steps_ahead_forecasts, forecast_point_steps_ahead], axis=0,
+                                                  ignore_index=False)
+            display(steps_ahead_forecasts)
+            display(self.test_data)
+            self.y_test_prediction = steps_ahead_forecasts
+            self.test_result = test_result
 
-        self.y_test_prediction = self.test_result.predict(start=self.test_interval[0], end=self.test_interval[1],
-                                                          dynamic=dynamic)
         if self.model is not None:
             self.model.endog = self.train_data
         # TODO does not work with seasonal
@@ -323,7 +339,7 @@ class ARModelsReport:
 def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
                             validation_interval=None, ground_truth_col='Disease Rate',
                             additional_model_cols=[], optimize_method=None,
-                            train_maxiter=1000, cov_type=None):
+                            train_maxiter=1000, cov_type=None, steps=1):
     """
     Creates ARModelsReport object containing training and testing report of given models.
 
@@ -374,7 +390,7 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
         ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
 
         print("Testing model {m} ...\n".format(m=str(ar_model_spec)))
-        ar_wrapper.test_model()
+        ar_wrapper.test_model(steps=steps)
         ar_model_wrappers.append(ar_wrapper)
 
         if ar_model_spec.model_name is not None:
@@ -388,6 +404,7 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
     for ar_wrapper in ar_model_wrappers:
         train_df[str(model_name_list[i])] = ar_wrapper.y_train_prediction
         test_df[str(model_name_list[i])] = ar_wrapper.y_test_prediction
+        display(test_df)
         i += 1
 
     for additional_model_col in additional_model_cols:

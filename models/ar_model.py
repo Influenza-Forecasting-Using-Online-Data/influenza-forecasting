@@ -10,6 +10,8 @@ from statsmodels.tsa.statespace.sarimax import SARIMAXResults, SARIMAXResultsWra
 
 from data.errors import get_models_error
 
+import os
+
 log = logging.getLogger("models.ar_model")
 
 
@@ -201,7 +203,8 @@ def get_ar_model_name(order, s_order=None):
 
 def plot_models(data, model_cols, x_format='month', figsize=(30, 10), ticks_fontsize=16,
                 legend_fontsize=20, title='', title_fontsize=20, label_fontsize=22,
-                xlim=None, ground_truth_col='Disease Rate', include_ground_truth=True):
+                xlim=None, ground_truth_col='Disease Rate', include_ground_truth=True, save=False, show=True,
+                folder_path=''):
     if isinstance(model_cols, list) is False:
         raise Exception("models_cols object must be passed as list")
 
@@ -236,7 +239,13 @@ def plot_models(data, model_cols, x_format='month', figsize=(30, 10), ticks_font
     if xlim is not None and len(xlim) == 2:
         plt.xlim(xlim[0], xlim[1])
 
-    plt.show()
+    if save:
+        file_name = os.path.join(folder_path, 'model_plot.png')
+        if title is not None and title != '':
+            file_name = os.path.join(folder_path, '%s.png' % str(title))
+        plt.savefig(file_name, bbox_inches='tight')
+    if show:
+        plt.show()
 
 
 class ARModelsReport:
@@ -269,21 +278,25 @@ class ARModelsReport:
                 'ar_model_spec should be an instance of models.ar_model.ARModelSpecification object')
         self.trainResultsMap[ar_model_spec] = train_result
 
-    def plot_models(self, multi_plot=False, include_ground_truth=True, xlim=None):
+    def plot_models(self, multi_plot=False, include_ground_truth=True, xlim=None, save=False, show=True,
+                    folder_path=''):
         plot_title = 'Out-of-sample Test Plot'
         plot_models(self.test_df, self.model_cols, x_format='week', title=plot_title,
                     ground_truth_col=self.ground_truth_col,
-                    include_ground_truth=include_ground_truth)  # TODO: add xlim here
+                    include_ground_truth=include_ground_truth, save=save, show=show,
+                    folder_path=folder_path)  # TODO: add xlim here
         if multi_plot is True:
             for model_col in self.model_cols:
                 plot_title = 'Out-of-sample Test Plot ' + str(model_col)
                 plot_models(self.test_df, [model_col], x_format='week', title=plot_title,
-                            ground_truth_col=self.ground_truth_col, include_ground_truth=include_ground_truth)
+                            ground_truth_col=self.ground_truth_col, include_ground_truth=include_ground_truth,
+                            save=save, show=show, folder_path=folder_path)
 
     def highlight_min(self, df, col_subset, props=''):
         return
 
-    def show_errors(self, highlight_min=True, highlight_max=False):
+    def get_errors(self, highlight_min=True, highlight_max=False):
+
         self.mae_df = self.mae_df.style.set_caption('MAE').highlight_min(axis=1, color='lightgreen',
                                                                          subset=self.mae_df.columns[2:])
         self.mape_df = self.mape_df.style.set_caption('MAPE').highlight_min(axis=1, color='lightgreen',
@@ -292,10 +305,15 @@ class ARModelsReport:
                                                                          subset=self.mse_df.columns[2:])
         self.rmse_df = self.rmse_df.style.set_caption('RMSE').highlight_min(axis=1, color='lightgreen',
                                                                             subset=self.rmse_df.columns[2:])
-        display(self.mae_df)
-        display(self.mape_df)
-        display(self.mse_df)
-        display(self.rmse_df)
+        errors_map = {'mae': self.mae_df, 'mape': self.mape_df, 'mse': self.mse_df, 'rmse': self.rmse_df}
+        return errors_map
+
+    def show_errors(self, highlight_min=True, highlight_max=False):
+        errors_map = self.get_errors(highlight_min=highlight_min, highlight_max=highlight_max)
+        display(errors_map['mae'])
+        display(errors_map['mape'])
+        display(errors_map['mse'])
+        display(errors_map['rmse'])
         # display(get_best_performing_models(mae_df))
         # display(get_best_performing_models(mape_df))
         # display(get_best_performing_models(mse_df))

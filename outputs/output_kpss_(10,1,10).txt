@@ -1,0 +1,75 @@
+Start INTERVALS: 
+
+
+
+
+Best model:  ARIMA(0,1,0)(0,0,0)[0] intercept
+Total fit time: 0.993 seconds
+2004-01-05 00:00:00  --->  2008-12-22 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,5)(0,0,0)[0] intercept
+Total fit time: 1.372 seconds
+2005-01-03 00:00:00  --->  2009-12-21 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,5)(0,0,0)[0] intercept
+Total fit time: 1.570 seconds
+2006-01-09 00:00:00  --->  2010-12-27 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,4)(0,0,0)[0] intercept
+Total fit time: 1.631 seconds
+2007-01-08 00:00:00  --->  2011-12-26 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,4)(0,0,0)[0] intercept
+Total fit time: 1.441 seconds
+2008-01-07 00:00:00  --->  2012-12-24 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,4)(0,0,0)[0] intercept
+Total fit time: 1.327 seconds
+2009-01-05 00:00:00  --->  2013-12-23 00:00:00
+
+
+
+
+Best model:  ARIMA(0,1,5)(0,0,0)[0] intercept
+Total fit time: 0.995 seconds
+2010-01-11 00:00:00  --->  2014-12-22 00:00:00
+
+
+
+
+Best model:  ARIMA(3,1,0)(0,0,0)[0] intercept
+Total fit time: 0.817 seconds
+2011-01-10 00:00:00  --->  2015-12-21 00:00:00
+
+
+
+
+Best model:  ARIMA(3,1,0)(0,0,0)[0] intercept
+Total fit time: 0.600 seconds
+2012-01-09 00:00:00  --->  2016-12-26 00:00:00
+
+
+
+
+Best model:  ARIMA(1,1,2)(0,0,0)[0] intercept
+Total fit time: 0.698 seconds
+2013-01-07 00:00:00  --->  2017-12-25 00:00:00
+
+
+
+End INTERVALS.

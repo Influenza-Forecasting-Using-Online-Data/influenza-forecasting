@@ -8,10 +8,14 @@ import pandas as pd
 import statsmodels.tsa.arima.model
 from statsmodels.tsa.ar_model import ar_select_order
 from statsmodels.tsa.statespace.sarimax import SARIMAXResults, SARIMAXResultsWrapper
+from termcolor import colored
 
 from data.errors import get_models_error
 
 log = logging.getLogger("models.ar_model")
+
+WARNING_TERM = colored('WARNING', 'red', attrs=['reverse'])
+FINISHED_TERM = colored('FINISHED', 'green', attrs=['reverse'])
 
 
 class ARModelSpecification:
@@ -37,6 +41,16 @@ class ARModelSpecification:
         return hash((self.model_class, self.order, self.seasonal_order))
 
     def __str__(self):
+        model_class_str = ""
+        if self.model_class == statsmodels.tsa.arima.model.ARIMA:
+            model_class_str = "statsmodels.tsa.arima.model.ARIMA"
+        elif self.model_class == statsmodels.tsa.statespace.sarimax.SARIMAX:
+            model_class_str = "statsmodels.tsa.statespace.sarimax.SARIMAX"
+        else:
+            model_class_str = "unknown class"
+        return model_class_str + " " + str(self.model_name)
+
+    def __repr__(self):
         model_class_str = ""
         if self.model_class == statsmodels.tsa.arima.model.ARIMA:
             model_class_str = "statsmodels.tsa.arima.model.ARIMA"
@@ -115,7 +129,7 @@ class ARModelWrapper:
         interval on data. If model was previously set using set_model, then this
         method will overwrite it. Will also overwrite model_name to be the name
         of the model class.
-        
+
         Returns: ar_select_order result, NOT model.
         """
         assert self.model is not None
@@ -179,8 +193,6 @@ class ARModelWrapper:
                 # print(forecast_point_steps_ahead)
                 steps_ahead_forecasts = pd.concat([steps_ahead_forecasts, forecast_point_steps_ahead], axis=0,
                                                   ignore_index=False)
-            display(steps_ahead_forecasts)
-            display(self.test_data)
             self.y_test_prediction = steps_ahead_forecasts
             self.test_result = test_result
 
@@ -260,12 +272,19 @@ def plot_models(data, model_cols, x_format='month', figsize=(30, 10), ticks_font
         if title is not None and title != '':
             file_name = os.path.join(folder_path, '%s.png' % str(title))
         plt.savefig(file_name, bbox_inches='tight')
+        plt.clf()
+        fig.clf()
+        plt.close('all')
     if show:
         plt.show()
 
 
 class ARModelsReport:
     def __init__(self):
+        self.rmse_styled_df = None
+        self.mse_styled_df = None
+        self.mape_styled_df = None
+        self.mae_styled_df = None
         self.model_cols = None
         self.test_df = None
         self.train_df = None
@@ -303,7 +322,7 @@ class ARModelsReport:
                     folder_path=folder_path)  # TODO: add xlim here
         if multi_plot is True:
             for model_col in self.model_cols:
-                plot_title = 'Out-of-sample Test Plot ' + str(model_col)
+                plot_title = 'Out-of-sample test ' + str(model_col)
                 plot_models(self.test_df, [model_col], x_format='week', title=plot_title,
                             ground_truth_col=self.ground_truth_col, include_ground_truth=include_ground_truth,
                             save=save, show=show, folder_path=folder_path)
@@ -313,15 +332,16 @@ class ARModelsReport:
 
     def get_errors(self, highlight_min=True, highlight_max=False):
 
-        self.mae_df = self.mae_df.style.set_caption('MAE').highlight_min(axis=1, color='lightgreen',
-                                                                         subset=self.mae_df.columns[2:])
-        self.mape_df = self.mape_df.style.set_caption('MAPE').highlight_min(axis=1, color='lightgreen',
-                                                                            subset=self.mape_df.columns[2:])
-        self.mse_df = self.mse_df.style.set_caption('MSE').highlight_min(axis=1, color='lightgreen',
-                                                                         subset=self.mse_df.columns[2:])
-        self.rmse_df = self.rmse_df.style.set_caption('RMSE').highlight_min(axis=1, color='lightgreen',
-                                                                            subset=self.rmse_df.columns[2:])
-        errors_map = {'mae': self.mae_df, 'mape': self.mape_df, 'mse': self.mse_df, 'rmse': self.rmse_df}
+        self.mae_styled_df = self.mae_df.style.set_caption('MAE').highlight_min(axis=1, color='lightgreen',
+                                                                                subset=self.mae_df.columns[2:])
+        self.mape_styled_df = self.mape_df.style.set_caption('MAPE').highlight_min(axis=1, color='lightgreen',
+                                                                                   subset=self.mape_df.columns[2:])
+        self.mse_styled_df = self.mse_df.style.set_caption('MSE').highlight_min(axis=1, color='lightgreen',
+                                                                                subset=self.mse_df.columns[2:])
+        self.rmse_styled_df = self.rmse_df.style.set_caption('RMSE').highlight_min(axis=1, color='lightgreen',
+                                                                                   subset=self.rmse_df.columns[2:])
+        errors_map = {'mae': self.mae_styled_df, 'mape': self.mape_styled_df, 'mse': self.mse_styled_df,
+                      'rmse': self.rmse_styled_df}
         return errors_map
 
     def show_errors(self, highlight_min=True, highlight_max=False):
@@ -378,25 +398,31 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
     ar_model_wrappers = []
     model_name_list = []
     for i in range(0, len(ar_model_specs)):
-        ar_model_spec = ar_model_specs[i]
-        ar_wrapper = ARModelWrapper(ar_model_specs[i])
+        try:
+            ar_model_spec = ar_model_specs[i]
+            ar_wrapper = ARModelWrapper(ar_model_specs[i])
 
-        ar_wrapper.set_data(data, ground_truth_col)
-        ar_wrapper.split_dataset_by_intervals(train_interval=train_interval, test_interval=test_interval,
-                                              validation_interval=validation_interval, print_data=False)
+            ar_wrapper.set_data(data, ground_truth_col)
+            ar_wrapper.split_dataset_by_intervals(train_interval=train_interval, test_interval=test_interval,
+                                                  validation_interval=validation_interval, print_data=False)
 
-        print("Training model {m} ...\n".format(m=str(ar_model_spec)))
-        ar_wrapper.train_model(method=optimize_method, maxiter=train_maxiter, cov_type=cov_type)
-        ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
+            print("Training model {m} ...".format(m=str(ar_model_spec)))
+            ar_wrapper.train_model(method=optimize_method, maxiter=train_maxiter, cov_type=cov_type)
+            ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
 
-        print("Testing model {m} ...\n".format(m=str(ar_model_spec)))
-        ar_wrapper.test_model(steps=steps)
-        ar_model_wrappers.append(ar_wrapper)
+            print("Testing model {m} ...".format(m=str(ar_model_spec)))
+            ar_wrapper.test_model(steps=steps)
+            ar_model_wrappers.append(ar_wrapper)
 
-        if ar_model_spec.model_name is not None:
-            model_name_list.append(str(i) + ' ' + str(ar_model_spec.model_name))
-        else:
-            model_name_list.append(str(i))
+            if ar_model_spec.model_name is not None:
+                model_name_list.append(str(i) + ' ' + str(ar_model_spec.model_name))
+            else:
+                model_name_list.append(str(i))
+        except:
+            print(
+                WARNING_TERM + 'create_ar_models_report: failed to generate report for model={m} on train_interval={'
+                               'tri}, train_interval{ti} due to exception... resuming execution'.format(
+                    m=str(ar_model_specs[i]), tri=str(train_interval), ti=str(test_interval)))
 
     i = 0
     train_df = ar_model_wrappers[0].data.copy(deep=True)[train_interval[0]:train_interval[1]]
@@ -404,7 +430,7 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
     for ar_wrapper in ar_model_wrappers:
         train_df[str(model_name_list[i])] = ar_wrapper.y_train_prediction
         test_df[str(model_name_list[i])] = ar_wrapper.y_test_prediction
-        display(test_df)
+        # display(test_df)
         i += 1
 
     for additional_model_col in additional_model_cols:
@@ -417,7 +443,7 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
     ar_models_report.set_model_cols(model_name_list)
 
     log.info("Creating error tables ...")
-    print("Creating error tables ...\n")
+    print("Creating error tables ...")
     ar_models_report.mae_df = get_models_error(test_df, error_type='mae', actual_col_name='Disease Rate',
                                                predicted_col_names=model_name_list)
     ar_models_report.mape_df = get_models_error(test_df, error_type='mape', actual_col_name='Disease Rate',
@@ -426,38 +452,72 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
                                                predicted_col_names=model_name_list)
     ar_models_report.rmse_df = get_models_error(test_df, error_type='rmse', actual_col_name='Disease Rate',
                                                 predicted_col_names=model_name_list)
+    print("Finished creating error tables ...")
+    print("ARModelsReport complete  ...")
     return ar_models_report
 
 
 def create_all_ar_models_report(data, ar_model_specs, train_intervals, test_intervals,
                                 validation_interval=None, ground_truth_col='Disease Rate',
                                 additional_model_cols=[], optimize_method=None,
-                                train_maxiter=1000, cov_type=None):
+                                train_maxiter=1000, cov_type=None, steps=1):
     if len(train_intervals) != len(test_intervals):
         raise Exception(
             'length of train_intervals not equal to test_intervals. Make sure each train interval has an associated '
             'test interval.')
-    for test_interval in test_intervals:
-        if test_interval[0].year != test_interval[1].year:
-            raise Exception(
-                'all test interval must span single, disjoint years form each other (current implementation).')
+    # for test_interval in test_intervals:
+    # if test_interval[0].year != test_interval[1].year:
+    #     raise Exception(
+    #         'all test interval must span single, disjoint years form each other (current implementation).')
+    # TODO: check if all itnervals are tuples, as they must be hashable
 
     test_intervals_to_reports_map = {'mae': pd.DataFrame(), 'mape': pd.DataFrame(), 'mse': pd.DataFrame(),
                                      'rmse': pd.DataFrame()}
     for i in range(0, len(train_intervals)):
-        train_interval = train_intervals[i]
-        test_interval = test_intervals[i]
-        ar_models_report = create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
-                                                   validation_interval=validation_interval,
-                                                   ground_truth_col=ground_truth_col,
-                                                   additional_model_cols=additional_model_cols,
-                                                   optimize_method=optimize_method,
-                                                   train_maxiter=train_maxiter, cov_type=cov_type)
-        # TODO: allow multiple years (hash by test_interval tuple). Currently only accepts test_intervals that span
-        #  disjoint years
-        test_intervals_to_reports_map[test_intervals[0].year] = ar_models_report
-        test_intervals_to_reports_map['mae'].append(ar_models_report.mae_df, ignore_index=True)
-        test_intervals_to_reports_map['mape'].append(ar_models_report.mape_df, ignore_index=True)
-        test_intervals_to_reports_map['mse'].append(ar_models_report.mse_df, ignore_index=True)
-        test_intervals_to_reports_map['rmse'].append(ar_models_report.rmse_df, ignore_index=True)
+        try:
+            train_interval = train_intervals[i]
+            test_interval = test_intervals[i]
+            ar_models_report = create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
+                                                       validation_interval=validation_interval,
+                                                       ground_truth_col=ground_truth_col,
+                                                       additional_model_cols=additional_model_cols,
+                                                       optimize_method=optimize_method,
+                                                       train_maxiter=train_maxiter, cov_type=cov_type, steps=steps)
+            # TODO: allow multiple years (hash by test_interval tuple). Currently only accepts test_intervals that span
+            #  disjoint years
+            test_intervals_to_reports_map[test_intervals[i]] = ar_models_report
+            ar_models_report.get_errors()
+            test_intervals_to_reports_map['mae'] = test_intervals_to_reports_map['mae'].append(ar_models_report.mae_df,
+                                                                                               ignore_index=True)
+            test_intervals_to_reports_map['mape'] = test_intervals_to_reports_map['mape'].append(
+                ar_models_report.mape_df,
+                ignore_index=True)
+            test_intervals_to_reports_map['mse'] = test_intervals_to_reports_map['mse'].append(ar_models_report.mse_df,
+                                                                                               ignore_index=True)
+            test_intervals_to_reports_map['rmse'] = test_intervals_to_reports_map['rmse'].append(
+                ar_models_report.rmse_df,
+                ignore_index=True)
+        except:
+            print(
+                WARNING_TERM + 'create_all_ar_models_report: failure on generating report for train_interval={tri}... '
+                               'resuming execution'.format(
+                    tri=str(train_intervals[i])))
+
+    test_intervals_to_reports_map['mae'] = test_intervals_to_reports_map['mae'].style.set_caption('MAE').highlight_min(
+        axis=1, color='lightgreen',
+        subset=test_intervals_to_reports_map[
+                   'mae'].columns[2:])
+    test_intervals_to_reports_map['mape'] = test_intervals_to_reports_map['mape'].style.set_caption(
+        'MAPE').highlight_min(axis=1, color='lightgreen',
+                              subset=test_intervals_to_reports_map[
+                                         'mape'].columns[2:])
+    test_intervals_to_reports_map['mse'] = test_intervals_to_reports_map['mse'].style.set_caption('MSE').highlight_min(
+        axis=1, color='lightgreen',
+        subset=test_intervals_to_reports_map[
+                   'mse'].columns[2:])
+    test_intervals_to_reports_map['rmse'] = test_intervals_to_reports_map['rmse'].style.set_caption(
+        'RMSE').highlight_min(axis=1, color='lightgreen',
+                              subset=test_intervals_to_reports_map[
+                                         'rmse'].columns[2:])
+    print(FINISHED_TERM + ' create_all_ar_models_report: finished generating all report')
     return test_intervals_to_reports_map

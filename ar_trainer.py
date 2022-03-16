@@ -1,16 +1,15 @@
+import logging
+import os
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 from data.utils import get_week_range_df, to_week_range
-from models.ar_model import ARModelSpecification, create_ar_models_report, create_all_ar_models_report
+from models.ar_model import ARModelSpecification, create_all_ar_models_report
 from models.persistence_model import create_persistence
-
-import os
-from datetime import datetime
-
-import logging
 
 log = logging.getLogger("models.ar_model")
 
@@ -29,7 +28,7 @@ BASELINE_SHIFT = 1
 PERSISTENCE_COL_NAME = 'Persistence'
 LAGS = 20
 
-DF = get_week_range_df('week range')
+DF = get_week_range_df('week range', include_search_terms=False)
 DF = create_persistence(DF, BASELINE_SHIFT, persistance_col_name=PERSISTENCE_COL_NAME)
 
 TRAIN_INTERVALS = [
@@ -59,33 +58,48 @@ TEST_INTERVALS = [
 ]
 
 MODEL_SPECS = [
-    ARModelSpecification(order=(3, 0, 1), model_class=SARIMAX),
+    ARModelSpecification(order=(3, 0, 0), model_class=SARIMAX),
+    ARModelSpecification(order=(5, 0, 0), model_class=SARIMAX),
     ARModelSpecification((3, 0, 0), seasonal_order=(3, 0, 0, 52), model_class=SARIMAX),
-    ARModelSpecification((3, 0, 0), seasonal_order=(3, 0, 3, 52), model_class=SARIMAX),
+    ARModelSpecification((5, 0, 0), seasonal_order=(3, 0, 0, 52), model_class=SARIMAX),
     ARModelSpecification((3, 0, 0), seasonal_order=(5, 0, 0, 52), model_class=SARIMAX),
-
+    ARModelSpecification((5, 0, 0), seasonal_order=(5, 0, 0, 52), model_class=SARIMAX),
 ]
 
-if __name__ == "__main__":
-    path = os.path.join("ar_runs", str(datetime.now()).replace(":", "-").replace(".", "-"))
-    print(str(path))
-    print('Created report folder at %s ...\n' % str(path))
+OPTIMIZE_METHOD = 'powell'
 
-    os.mkdir(path)
+OUTPUT_ROOT_DIR = "ar_runs"
+
+if __name__ == "__main__":
+    if not os.path.exists(OUTPUT_ROOT_DIR):
+        os.mkdir(OUTPUT_ROOT_DIR)
+    folder_timestamp = str(datetime.now()).replace(":", "_").replace(".", "_")
+    relative_output_path = os.path.join(OUTPUT_ROOT_DIR, folder_timestamp)
+    print('Created report folder at %s ...\n' % str(relative_output_path))
+
+    os.mkdir(relative_output_path)
     print('Started creating AR models report...\n')
-    ar_model_report = create_ar_models_report(data=DF, ar_model_specs=MODEL_SPECS, train_interval=TRAIN_INTERVALS[0],
-                                              test_interval=TEST_INTERVALS[0],
-                                              additional_model_cols=[PERSISTENCE_COL_NAME],
-                                              cov_type=None, train_maxiter=3000, optimize_method='powell')
+    test_intervals_to_reports_map = create_all_ar_models_report(data=DF, ar_model_specs=MODEL_SPECS,
+                                                                train_intervals=TRAIN_INTERVALS,
+                                                                test_intervals=TEST_INTERVALS,
+                                                                additional_model_cols=[PERSISTENCE_COL_NAME],
+                                                                train_maxiter=1000, optimize_method=OPTIMIZE_METHOD,
+                                                                cov_type=None)
     print('Finished creating AR models report...\n')
-    errors_map = ar_model_report.get_errors()
     print('Writing errors to xlsx ...\n')
-    with pd.ExcelWriter(os.path.join(path, 'errors.xlsx'), engine='xlsxwriter') as writer:
-        errors_map['mae'].to_excel(writer, sheet_name='MAE')
-        errors_map['mape'].to_excel(writer, sheet_name='MAPE')
-        errors_map['mse'].to_excel(writer, sheet_name='MSE')
-        errors_map['rmse'].to_excel(writer, sheet_name='RMSE')
+    with pd.ExcelWriter(
+            os.path.join(relative_output_path, 'errors ' + OPTIMIZE_METHOD + ' ' + folder_timestamp + '.xlsx'),
+            engine='xlsxwriter') as writer:
+        test_intervals_to_reports_map['mae'].to_excel(writer, sheet_name='MAE')
+        test_intervals_to_reports_map['mape'].to_excel(writer, sheet_name='MAPE')
+        test_intervals_to_reports_map['mse'].to_excel(writer, sheet_name='MSE')
+        test_intervals_to_reports_map['rmse'].to_excel(writer, sheet_name='RMSE')
     print('Finished writing errors to xlsx ...\n')
     print('Saving AR models plots...\n')
-    ar_model_report.plot_models(include_ground_truth=True, multi_plot=True, save=True, show=False, folder_path=path)
-    print('DONE...\n')
+    for test_interval in TEST_INTERVALS:
+        plots_folder_name = test_interval[0].strftime("%Y-%m-%d") + "_" + test_interval[1].strftime("%Y-%m-%d")
+        plots_path = os.path.join(relative_output_path, plots_folder_name)
+        os.mkdir(plots_path)
+        test_intervals_to_reports_map[test_interval].plot_models(include_ground_truth=True, multi_plot=True, save=True,
+                                                                 folder_path=plots_path, show=False)
+    print('Done...\n')

@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import statsmodels.tsa.arima.model
 from statsmodels.tsa.ar_model import ar_select_order
+from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAXResults, SARIMAXResultsWrapper
 from termcolor import colored
 
@@ -27,7 +28,8 @@ class ARModelSpecification:
 
     def init_model(self, endog, exog=None):
         self.model_name = get_ar_model_name(self.order, self.seasonal_order)
-        return self.model_class(endog=endog, exog=exog, order=self.order, seasonal_order=self.seasonal_order)
+        return self.model_class(endog=endog, exog=exog, order=self.order, seasonal_order=self.seasonal_order,
+                                freq='W')  # TODO: check if freq correct
 
     def __eq__(self, other):
         if self.model_class == other.model_class and self.order == other.order and self.seasonal_order == other.seasonal_order:
@@ -141,7 +143,7 @@ class ARModelWrapper:
         return select_result
 
     def _fit(self, method, maxiter=None, cov_type=None):
-        if self.ar_model_spec.model_class == statsmodels.tsa.arima.model.ARIMA and maxiter is not None:
+        if self.ar_model_spec.model_class == ARIMA and maxiter is not None:
             warnings.warn(
                 'Cannot use maxiter={x}: maxiter paramter not supported by statsmodels.tsa.arima.model.ARIMA'.format(
                     x=maxiter))
@@ -167,11 +169,11 @@ class ARModelWrapper:
         if maxiter is not None:
             self.maxiter = maxiter
         self.train_result = self._fit(method=self.method, maxiter=self.maxiter, cov_type=cov_type)
-
-        self.y_train_prediction = self.train_result.predict(self.train_interval[0], self.train_interval[1])
+        # TODO: remove train prediction for memory usage improvement
+        # self.y_train_prediction = self.train_result.predict(self.train_interval[0], self.train_interval[1])
         return self.train_result
 
-    def test_model(self, steps=1):
+    def test_model(self, steps=1, keep_test_result_obj=False):
         if steps < 1:
             raise Exception('steps must be greater than or equal to 1')
         assert self.model is not None
@@ -179,12 +181,12 @@ class ARModelWrapper:
         assert self.test_data is not None
         assert self.train_result is not None
 
+        test_result = None
         if steps == 1:
-            self.test_result = self.train_result.apply(endog=self.test_and_train_data, refit=False)
-            self.y_test_prediction = self.test_result.predict(start=self.test_interval[0], end=self.test_interval[1],
-                                                              dynamic=False)
+            test_result = self.train_result.apply(endog=self.test_and_train_data, refit=False)
+            self.y_test_prediction = test_result.predict(start=self.test_interval[0], end=self.test_interval[1],
+                                                         dynamic=False)
         else:
-            test_result = None
             steps_ahead_forecasts = self.test_data.copy(deep=True).iloc[0:steps - 1]
             for i in range(0, len(self.test_data) - steps + 1):
                 test_result = self.train_result.append(endog=[self.test_data.iloc[i]], refit=False)
@@ -194,12 +196,13 @@ class ARModelWrapper:
                 steps_ahead_forecasts = pd.concat([steps_ahead_forecasts, forecast_point_steps_ahead], axis=0,
                                                   ignore_index=False)
             self.y_test_prediction = steps_ahead_forecasts
+        if keep_test_result_obj is True:
             self.test_result = test_result
 
         if self.model is not None:
             self.model.endog = self.train_data
         # TODO does not work with seasonal
-        return self.test_result
+        return test_result
 
     def get_train_prediction_df(self, model_name=None, steps=1):
         assert self.train_result is not None
@@ -244,6 +247,10 @@ def plot_models(data, model_cols, x_format='month', figsize=(30, 10), ticks_font
     elif x_format == 'week':
         x_axis_locator = mdates.WeekdayLocator(byweekday=mdates.MO, interval=1)
         x_axis_formatter = mdates.ConciseDateFormatter(x_axis_locator)
+    elif x_format == 'year':
+        x_axis_locator = mdates.YearLocator(interval=1)
+        x_axis_formatter = mdates.DateFormatter('%Y')
+        # x_axis_formatter = mdates.ConciseDateFormatter(x_axis_locator)
     else:
         raise Exception("x_format must be 'month' or 'week'")
 
@@ -296,7 +303,7 @@ class ARModelsReport:
         self.trainResultsMap = {}
 
     def set_train_dataframe(self, train_df):
-        self.test_df = train_df
+        self.train_df = train_df
 
     def set_test_dataframe(self, test_df):
         self.test_df = test_df
@@ -359,7 +366,7 @@ class ARModelsReport:
 def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
                             validation_interval=None, ground_truth_col='Disease Rate',
                             additional_model_cols=[], optimize_method=None,
-                            train_maxiter=1000, cov_type=None, steps=1):
+                            train_maxiter=1000, cov_type=None, steps=1, add_train_result_obj=False):
     """
     Creates ARModelsReport object containing training and testing report of given models.
 
@@ -406,11 +413,12 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
             ar_wrapper.split_dataset_by_intervals(train_interval=train_interval, test_interval=test_interval,
                                                   validation_interval=validation_interval, print_data=False)
 
-            print("Training model {m} ...".format(m=str(ar_model_spec)))
+            print("Training model {m} on interval {tr}...".format(m=str(ar_model_spec), tr=str(train_interval)))
             ar_wrapper.train_model(method=optimize_method, maxiter=train_maxiter, cov_type=cov_type)
-            ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
+            if add_train_result_obj is True:
+                ar_models_report.add_train_result(ar_model_spec, ar_wrapper.train_result)
 
-            print("Testing model {m} ...".format(m=str(ar_model_spec)))
+            print("Testing model {m} on interval {t}...".format(m=str(ar_model_spec), t=str(test_interval)))
             ar_wrapper.test_model(steps=steps)
             ar_model_wrappers.append(ar_wrapper)
 
@@ -420,25 +428,24 @@ def create_ar_models_report(data, ar_model_specs, train_interval, test_interval,
                 model_name_list.append(str(i))
         except:
             print(
-                WARNING_TERM + 'create_ar_models_report: failed to generate report for model={m} on train_interval={'
-                               'tri}, train_interval{ti} due to exception... resuming execution'.format(
+                WARNING_TERM + 'create_ar_models_report: failed to generate report for model={m} on train_interval={''tri}, train_interval{ti} due to exception... resuming execution'.format(
                     m=str(ar_model_specs[i]), tri=str(train_interval), ti=str(test_interval)))
 
     i = 0
-    train_df = ar_model_wrappers[0].data.copy(deep=True)[train_interval[0]:train_interval[1]]
+    # train_df = ar_model_wrappers[0].data.copy(deep=True)[train_interval[0]:train_interval[1]]
     test_df = ar_model_wrappers[0].data.copy(deep=True)[test_interval[0]:test_interval[1]]
     for ar_wrapper in ar_model_wrappers:
-        train_df[str(model_name_list[i])] = ar_wrapper.y_train_prediction
+        # train_df[str(model_name_list[i])] = ar_wrapper.y_train_prediction
         test_df[str(model_name_list[i])] = ar_wrapper.y_test_prediction
         # display(test_df)
         i += 1
 
     for additional_model_col in additional_model_cols:
-        train_df[additional_model_col] = data[additional_model_col][train_interval[0]:train_interval[1]]
+        # train_df[additional_model_col] = data[additional_model_col][train_interval[0]:train_interval[1]]
         test_df[additional_model_col] = data[additional_model_col][test_interval[0]:test_interval[1]]
         model_name_list.append(additional_model_col)
 
-    ar_models_report.set_train_dataframe(train_df)
+    # ar_models_report.set_train_dataframe(train_df)
     ar_models_report.set_test_dataframe(test_df)
     ar_models_report.set_model_cols(model_name_list)
 
@@ -469,7 +476,7 @@ def create_all_ar_models_report(data, ar_model_specs, train_intervals, test_inte
     # if test_interval[0].year != test_interval[1].year:
     #     raise Exception(
     #         'all test interval must span single, disjoint years form each other (current implementation).')
-    # TODO: check if all itnervals are tuples, as they must be hashable
+    # TODO: check if all intervals are tuples, as they must be hashable
 
     test_intervals_to_reports_map = {'mae': pd.DataFrame(), 'mape': pd.DataFrame(), 'mse': pd.DataFrame(),
                                      'rmse': pd.DataFrame()}
